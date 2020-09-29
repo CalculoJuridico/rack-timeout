@@ -66,6 +66,10 @@ module Rack
       :service_past_wait, # when false, reduces the request's computed timeout from the service_timeout value if the complete request lifetime (wait + service) would have been longer than wait_timeout (+ wait_overtime when applicable). When true, always uses the service_timeout value. we default to false under the assumption that the router would drop a request that's not responded within wait_timeout, thus being there no point in servicing beyond seconds_service_left (see code further down) up until service_timeout.
       :term_on_timeout
 
+    class << self
+      attr_accessor :conditional_timeout # service_timeout is determined on the fly, evaluating the given block in the middleware context
+    end
+
     def initialize(app, service_timeout:nil, wait_timeout:nil, wait_overtime:nil, service_past_wait:"not_specified", term_on_timeout: nil)
       @term_on_timeout   = read_timeout_property term_on_timeout, ENV.fetch("RACK_TIMEOUT_TERM_ON_TIMEOUT", 0).to_i
       @service_timeout   = read_timeout_property service_timeout, ENV.fetch("RACK_TIMEOUT_SERVICE_TIMEOUT", 15).to_i
@@ -106,6 +110,14 @@ module Rack
           raise RequestExpiryError.new(env), "Request older than #{info.ms(:timeout)}."
         end
       end
+
+      # set service timeout from configuration or by calling conditional_timeout block with env
+      service_timeout =
+        if self.class.conditional_timeout.respond_to?(:call)
+          self.class.conditional_timeout.call(env)
+        else
+          self.service_timeout
+        end
 
       # pass request through if service_timeout is false (i.e., don't time it out at all.)
       return @app.call(env) unless service_timeout
